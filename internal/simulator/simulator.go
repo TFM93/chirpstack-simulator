@@ -30,43 +30,57 @@ import (
 // Start starts the simulator.
 func Start(ctx context.Context, wg *sync.WaitGroup, c config.Config) error {
 	for i, c := range c.Simulator {
-		log.WithFields(log.Fields{
-			"i": i,
-		}).Info("simulator: starting simulation")
-
-		wg.Add(1)
-
 		spID, err := uuid.FromString(c.ServiceProfileID)
 		if err != nil {
 			return errors.Wrap(err, "uuid from string error")
 		}
 
-		pl, err := hex.DecodeString(c.Device.Payload)
-		if err != nil {
-			return errors.Wrap(err, "decode payload error")
+		for j, d := range c.Device {
+			log.WithFields(log.Fields{
+				"simulation_table": i,
+				"device_table":     j,
+			}).Info("simulator: starting simulation")
+			wg.Add(1)
+			pl, err := hex.DecodeString(d.Payload)
+			if err != nil {
+				return errors.Wrap(err, "decode payload error")
+			}
+
+			sim := simulation{
+				ctx:                  ctx,
+				wg:                   wg,
+				serviceProfileID:     spID,
+				deviceCount:          d.Count,
+				devEUI:               d.DevEUI,
+				activationTime:       c.ActivationTime,
+				uplinkInterval:       d.UplinkInterval,
+				fPort:                d.FPort,
+				payload:              pl,
+				frequency:            d.Frequency,
+				bandwidth:            d.Bandwidth / 1000,
+				spreadingFactor:      d.SpreadingFactor,
+				duration:             c.Duration,
+				gatewayMinCount:      c.Gateway.MinCount,
+				gatewayMaxCount:      c.Gateway.MaxCount,
+				deviceAppKeys:        make(map[lorawan.EUI64]lorawan.AES128Key),
+				eventTopicTemplate:   c.Gateway.EventTopicTemplate,
+				commandTopicTemplate: c.Gateway.CommandTopicTemplate,
+			}
+			dpID, err := uuid.FromString(d.DeviceProfileID)
+			if err == nil {
+				sim.deviceProfileID = &dpID
+				sim.skipDpTeardown = true
+
+			}
+
+			if d.AppID > 0 {
+				sim.applicationID = &d.AppID
+				sim.skipAppTeardown = true
+			}
+
+			go sim.start()
 		}
 
-		sim := simulation{
-			ctx:                  ctx,
-			wg:                   wg,
-			serviceProfileID:     spID,
-			deviceCount:          c.Device.Count,
-			activationTime:       c.ActivationTime,
-			uplinkInterval:       c.Device.UplinkInterval,
-			fPort:                c.Device.FPort,
-			payload:              pl,
-			frequency:            c.Device.Frequency,
-			bandwidth:            c.Device.Bandwidth / 1000,
-			spreadingFactor:      c.Device.SpreadingFactor,
-			duration:             c.Duration,
-			gatewayMinCount:      c.Gateway.MinCount,
-			gatewayMaxCount:      c.Gateway.MaxCount,
-			deviceAppKeys:        make(map[lorawan.EUI64]lorawan.AES128Key),
-			eventTopicTemplate:   c.Gateway.EventTopicTemplate,
-			commandTopicTemplate: c.Gateway.CommandTopicTemplate,
-		}
-
-		go sim.start()
 	}
 
 	return nil
@@ -77,6 +91,7 @@ type simulation struct {
 	wg               *sync.WaitGroup
 	serviceProfileID uuid.UUID
 	deviceCount      int
+	devEUI           string
 	gatewayMinCount  int
 	gatewayMaxCount  int
 	duration         time.Duration
@@ -90,8 +105,10 @@ type simulation struct {
 	spreadingFactor int
 
 	serviceProfile       *api.ServiceProfile
-	deviceProfileID      uuid.UUID
-	applicationID        int64
+	skipDpTeardown       bool
+	deviceProfileID      *uuid.UUID
+	skipAppTeardown      bool
+	applicationID        *int64
 	gatewayIDs           []lorawan.EUI64
 	deviceAppKeys        map[lorawan.EUI64]lorawan.AES128Key
 	eventTopicTemplate   string
@@ -316,8 +333,11 @@ func (s *simulation) tearDownGateways() error {
 }
 
 func (s *simulation) setupDeviceProfile() error {
-	log.Info("simulator: creating device-profile")
-
+	if s.skipDpTeardown {
+		// do not create because is given in config
+		return nil
+	}
+	// only create when no ID already defined
 	dpName, _ := uuid.NewV4()
 
 	resp, err := as.DeviceProfile().Create(context.Background(), &api.CreateDeviceProfileRequest{
@@ -338,12 +358,15 @@ func (s *simulation) setupDeviceProfile() error {
 	if err != nil {
 		return err
 	}
-	s.deviceProfileID = dpID
+	s.deviceProfileID = &dpID
 
 	return nil
 }
 
 func (s *simulation) tearDownDeviceProfile() error {
+	if s.skipDpTeardown {
+		return nil
+	}
 	log.Info("simulator: tear-down device-profile")
 
 	_, err := as.DeviceProfile().Delete(context.Background(), &api.DeleteDeviceProfileRequest{
@@ -357,6 +380,10 @@ func (s *simulation) tearDownDeviceProfile() error {
 }
 
 func (s *simulation) setupApplication() error {
+	if s.skipAppTeardown {
+		// do not create because is given in config
+		return nil
+	}
 	log.Info("simulator: init application")
 
 	appName, err := uuid.NewV4()
@@ -376,15 +403,18 @@ func (s *simulation) setupApplication() error {
 		return errors.Wrap(err, "create applicaiton error")
 	}
 
-	s.applicationID = createAppResp.Id
+	s.applicationID = &createAppResp.Id
 	return nil
 }
 
 func (s *simulation) tearDownApplication() error {
+	if s.skipAppTeardown {
+		return nil
+	}
 	log.Info("simulator: tear-down application")
 
 	_, err := as.Application().Delete(context.Background(), &api.DeleteApplicationRequest{
-		Id: s.applicationID,
+		Id: *s.applicationID,
 	})
 	if err != nil {
 		return errors.Wrap(err, "delete application error")
@@ -394,34 +424,35 @@ func (s *simulation) tearDownApplication() error {
 
 func (s *simulation) setupDevices() error {
 	log.Info("simulator: init devices")
-
+	var err error
 	for i := 0; i < s.deviceCount; i++ {
 		var devEUI lorawan.EUI64
 		var appKey lorawan.AES128Key
-
-		if _, err := rand.Read(devEUI[:]); err != nil {
-			return err
-		}
 		if _, err := rand.Read(appKey[:]); err != nil {
 			return err
 		}
-
-		_, err := as.Device().Create(context.Background(), &api.CreateDeviceRequest{
-			Device: &api.Device{
-				DevEui:          devEUI.String(),
-				Name:            devEUI.String(),
-				Description:     devEUI.String(),
-				ApplicationId:   s.applicationID,
-				DeviceProfileId: s.deviceProfileID.String(),
-			},
-		})
-		if err != nil {
-			return errors.Wrap(err, "create device error")
+		if i > 0 || len(s.devEUI) <= 0 {
+			if _, err := rand.Read(devEUI[:]); err != nil {
+				return err
+			}
+			s.devEUI = devEUI.String()
+			_, err = as.Device().Create(context.Background(), &api.CreateDeviceRequest{
+				Device: &api.Device{
+					DevEui:          s.devEUI,
+					Name:            s.devEUI,
+					Description:     s.devEUI,
+					ApplicationId:   *s.applicationID,
+					DeviceProfileId: s.deviceProfileID.String(),
+				},
+			})
+			if err != nil {
+				return errors.Wrap(err, "create device error")
+			}
 		}
 
 		_, err = as.Device().CreateKeys(context.Background(), &api.CreateDeviceKeysRequest{
 			DeviceKeys: &api.DeviceKeys{
-				DevEui: devEUI.String(),
+				DevEui: s.devEUI,
 
 				// yes, this is correct for LoRaWAN 1.0.x!
 				// see the API documentation
@@ -431,7 +462,7 @@ func (s *simulation) setupDevices() error {
 		if err != nil {
 			return errors.Wrap(err, "create device keys error")
 		}
-
+		_ = devEUI.Scan([]byte(s.devEUI))
 		s.deviceAppKeys[devEUI] = appKey
 	}
 
@@ -442,6 +473,9 @@ func (s *simulation) tearDownDevices() error {
 	log.Info("simulator: tear-down devices")
 
 	for k := range s.deviceAppKeys {
+		if s.devEUI == k.String() {
+			continue
+		}
 		_, err := as.Device().Delete(context.Background(), &api.DeleteDeviceRequest{
 			DevEui: k.String(),
 		})

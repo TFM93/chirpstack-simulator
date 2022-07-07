@@ -126,10 +126,19 @@ duration="5m"
 activation_time="1m"
 
   # Device configuration.
-  [simulator.device]
+  [[simulator.device]]
 
   # Number of devices to simulate.
   count=1000
+
+  # DevEUI, if not empty the first device will have this value and will not be deleted
+  dev_eui="PUT_YOUR_DEVICE_EUI_HERE"
+
+  # DeviceProfileID, if not empty this will be the deviceprofileid to be used and will not be deleted
+  device_profile_id="PUT_YOUR_DEVICE_PROFILE_ID_HERE"
+
+  # ApplicationID, if bigger than 0 this will be the appid to be used and will not be deleted
+  app_id=0
 
   # Uplink interval.
   uplink_interval="5m"

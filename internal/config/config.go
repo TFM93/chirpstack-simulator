@@ -46,14 +46,18 @@ type Config struct {
 		Duration         time.Duration `mapstructure:"duration"`
 		ActivationTime   time.Duration `mapstructure:"activation_time"`
 
-		Device struct {
-			Count           int           `mapstructure:"count"`
+		Device []struct {
+			Count int `mapstructure:"count"`
+			// The first Device will have the defined DevEUI
+			DevEUI          string        `mapstructure:"dev_eui"`
 			UplinkInterval  time.Duration `mapstructure:"uplink_interval"`
 			FPort           uint8         `mapstructure:"f_port"`
 			Payload         string        `mapstructure:"payload"`
 			Frequency       int           `mapstructure:"frequency"`
 			Bandwidth       int           `mapstructure:"bandwidth"`
 			SpreadingFactor int           `mapstructure:"spreading_factor"`
+			DeviceProfileID string        `mapstructure:"device_profile_id"`
+			AppID           int64         `mapstructure:"app_id"`
 		} `mapstructure:"device"`
 
 		Gateway struct {
