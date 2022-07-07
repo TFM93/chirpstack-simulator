@@ -134,6 +134,9 @@ activation_time="1m"
   # DevEUI, if not empty the first device will have this value and will not be deleted
   dev_eui="PUT_YOUR_DEVICE_EUI_HERE"
 
+   # NwkKey, if not empty the first device will have this value as nwkKey
+  nwk_key="PUT_YOUR_APPKEY_HERE"
+
   # DeviceProfileID, if not empty this will be the deviceprofileid to be used and will not be deleted
   device_profile_id="PUT_YOUR_DEVICE_PROFILE_ID_HERE"
 

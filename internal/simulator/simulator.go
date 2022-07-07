@@ -78,6 +78,10 @@ func Start(ctx context.Context, wg *sync.WaitGroup, c config.Config) error {
 				sim.skipAppTeardown = true
 			}
 
+			if len(d.NwkKey) > 0 {
+				sim.nwkKey = d.NwkKey
+			}
+
 			go sim.start()
 		}
 
@@ -92,6 +96,7 @@ type simulation struct {
 	serviceProfileID uuid.UUID
 	deviceCount      int
 	devEUI           string
+	nwkKey           string
 	gatewayMinCount  int
 	gatewayMaxCount  int
 	duration         time.Duration
@@ -426,12 +431,13 @@ func (s *simulation) setupDevices() error {
 	log.Info("simulator: init devices")
 	var err error
 	for i := 0; i < s.deviceCount; i++ {
+		isUsrDevEUI := (i == 0 && len(s.devEUI) > 0 && len(s.nwkKey) > 0)
 		var devEUI lorawan.EUI64
 		var appKey lorawan.AES128Key
-		if _, err := rand.Read(appKey[:]); err != nil {
-			return err
-		}
-		if i > 0 || len(s.devEUI) <= 0 {
+		if !isUsrDevEUI {
+			if _, err := rand.Read(appKey[:]); err != nil {
+				return err
+			}
 			if _, err := rand.Read(devEUI[:]); err != nil {
 				return err
 			}
@@ -448,21 +454,25 @@ func (s *simulation) setupDevices() error {
 			if err != nil {
 				return errors.Wrap(err, "create device error")
 			}
-		}
+			_, err = as.Device().CreateKeys(context.Background(), &api.CreateDeviceKeysRequest{
+				DeviceKeys: &api.DeviceKeys{
+					DevEui: s.devEUI,
 
-		_, err = as.Device().CreateKeys(context.Background(), &api.CreateDeviceKeysRequest{
-			DeviceKeys: &api.DeviceKeys{
-				DevEui: s.devEUI,
-
-				// yes, this is correct for LoRaWAN 1.0.x!
-				// see the API documentation
-				NwkKey: appKey.String(),
-			},
-		})
-		if err != nil {
-			return errors.Wrap(err, "create device keys error")
+					// yes, this is correct for LoRaWAN 1.0.x!
+					// see the API documentation
+					NwkKey: appKey.String(),
+				},
+			})
+			if err != nil {
+				return errors.Wrap(err, "create device keys error")
+			}
 		}
-		_ = devEUI.Scan([]byte(s.devEUI))
+		if err = devEUI.Scan([]byte(s.devEUI)); err != nil {
+			return err
+		}
+		if err = appKey.Scan([]byte(s.nwkKey)); err != nil {
+			return err
+		}
 		s.deviceAppKeys[devEUI] = appKey
 	}
 

@@ -50,6 +50,7 @@ type Config struct {
 			Count int `mapstructure:"count"`
 			// The first Device will have the defined DevEUI
 			DevEUI          string        `mapstructure:"dev_eui"`
+			NwkKey          string        `mapstructure:"nwk_key"`
 			UplinkInterval  time.Duration `mapstructure:"uplink_interval"`
 			FPort           uint8         `mapstructure:"f_port"`
 			Payload         string        `mapstructure:"payload"`
